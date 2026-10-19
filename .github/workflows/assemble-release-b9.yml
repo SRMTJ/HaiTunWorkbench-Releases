@@ -15,7 +15,7 @@ jobs:
           import concurrent.futures, hashlib, http.client, json, os, pathlib, time, urllib.error, urllib.parse, urllib.request
           repo = 'SRMTJ/HaiTunWorkbench-Releases'
           release_id = 417207164
-          expected_sha = 'b9629f2a2d0fb2ced3065fcb9b451ea2a118974443796fa7e7a0529e9125d8e7'
+          expected_sha = '157844e759ff070cf2edc6429ed50a7a69fde067bbc5798780c6daa97c9cfcf2'
           expected_file = 'HaiTunWorkbench-desktop-windows-amd64-1.0.2b9.exe'
           expected_size = 203306392
           headers = {'Authorization':'Bearer '+os.environ['GH_TOKEN'], 'User-Agent':'HaiTunWorkbench-release', 'Accept':'application/vnd.github+json'}
