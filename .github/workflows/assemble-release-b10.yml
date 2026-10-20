@@ -1,0 +1,83 @@
+name: Assemble verified b10 installer
+on: workflow_dispatch
+permissions:
+  contents: write
+jobs:
+  assemble:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Verify parts, assemble installer and remove transport assets
+        shell: python
+        run: |
+          import concurrent.futures, hashlib, http.client, json, os, pathlib, time, urllib.error, urllib.parse, urllib.request
+          repo = 'SRMTJ/HaiTunWorkbench-Releases'
+          release_id = 418326933
+          expected_sha = '56195596d48d211307ccc0fac4ac14b7d740e1ab47caba7e71f98928601f7648'
+          expected_file = 'HaiTunWorkbench-desktop-windows-amd64-1.0.2b10.exe'
+          expected_size = 203407166
+          headers = {'Authorization':'Bearer '+os.environ['GH_TOKEN'], 'User-Agent':'HaiTunWorkbench-release', 'Accept':'application/vnd.github+json'}
+          def api(path, method='GET'):
+              with urllib.request.urlopen(urllib.request.Request('https://api.github.com/'+path, headers=headers, method=method), timeout=60) as response:
+                  payload=response.read()
+                  return json.loads(payload) if payload else None
+          class NoRedirect(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self, req, fp, code, msg, response_headers, newurl): return None
+          def download(asset_id):
+              req=urllib.request.Request(f'https://api.github.com/repos/{repo}/releases/assets/{int(asset_id)}',headers=dict(headers,Accept='application/octet-stream'))
+              try:
+                  with urllib.request.build_opener(NoRedirect).open(req,timeout=60) as response: return response.read()
+              except urllib.error.HTTPError as error:
+                  if error.code not in (301,302,303,307,308): raise
+                  location=error.headers['Location']
+                  parsed=urllib.parse.urlsplit(location)
+                  assert parsed.scheme=='https' and parsed.hostname in ('release-assets.githubusercontent.com','objects.githubusercontent.com')
+                  # Do not forward the repository token to the signed asset URL.
+                  with urllib.request.urlopen(location,timeout=120) as response: return response.read()
+          release=api(f'repos/{repo}/releases/{release_id}')
+          assert release['draft'] and release['tag_name']=='v1.0.2b10'
+          assets=release['assets']
+          existing=next((a for a in assets if a['name']==expected_file),None)
+          metadata_asset=next((a for a in assets if a['name']=='transport-b10.json'),None)
+          if existing:
+              assert existing['size']==expected_size and existing['digest']=='sha256:'+expected_sha
+          else:
+              assert metadata_asset
+              metadata=json.loads(download(metadata_asset['id']))
+              assert metadata['sha256']==expected_sha and metadata['size']==expected_size and metadata['file']==expected_file
+              assert metadata['release_id']==release_id and metadata['tag']=='v1.0.2b10'
+              directory=pathlib.Path('/tmp/haitun-release'); directory.mkdir()
+              allowed={a['id']:a for a in assets}
+              def get_part(item):
+                  index,part=item
+                  assert part['name']==f'transport-b10-{index:03}.part' and allowed[part['id']]['name']==part['name']
+                  data=download(part['id'])
+                  assert len(data)==part['size'] and hashlib.sha256(data).hexdigest()==part['sha256']
+                  path=directory/part['name']; path.write_bytes(data)
+                  return path
+              with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+                  paths=list(executor.map(get_part,enumerate(metadata['parts'])))
+              installer=directory/expected_file
+              digest=hashlib.sha256()
+              with installer.open('wb') as output:
+                  for path in paths:
+                      data=path.read_bytes(); output.write(data); digest.update(data)
+              assert installer.stat().st_size==expected_size and digest.hexdigest()==expected_sha
+              connection=http.client.HTTPSConnection('uploads.github.com',timeout=180)
+              connection.putrequest('POST',f'/repos/{repo}/releases/{release_id}/assets?name='+expected_file)
+              for name,value in dict(headers, **{'Content-Type':'application/octet-stream','Content-Length':str(expected_size)}).items(): connection.putheader(name,value)
+              connection.endheaders()
+              with installer.open('rb') as source:
+                  while block:=source.read(1024*1024): connection.send(block)
+              response=connection.getresponse(); asset=json.loads(response.read()); connection.close()
+              assert response.status==201 and asset['size']==expected_size and asset['digest']=='sha256:'+expected_sha
+          current=api(f'repos/{repo}/releases/{release_id}')
+          for asset in current['assets']:
+              if asset['name'].startswith('transport-b10-') and asset['name'].endswith('.part') or asset['name']=='transport-b10.json':
+                  api(f'repos/{repo}/releases/assets/{asset["id"]}',method='DELETE')
+                  time.sleep(0.6)
+          remaining=api(f'repos/{repo}/releases/{release_id}')
+          assert {a['name'] for a in remaining['assets']}=={expected_file,'manifest.json','manifest.sig'}
+          print('Verified installer assembled; only three final assets remain. Release is still a draft.')
