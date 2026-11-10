@@ -1,0 +1,35 @@
+name: Verify public 1.0.5 download
+on: workflow_dispatch
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Verify anonymous installer download
+        shell: python
+        run: |
+          import hashlib, json, urllib.request
+          base = "https://github.com/SRMTJ/HaiTunWorkbench-Releases/releases/download/v1.0.5/"
+          def open_public(url):
+              return urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "HaiTun-public-download-verification"}), timeout=120)
+          with open_public("https://api.github.com/repos/SRMTJ/HaiTunWorkbench-Releases/releases/tags/v1.0.5") as response:
+              release = json.load(response)
+          assert not release["draft"] and not release["prerelease"]
+          with open_public(base + "manifest.json") as response:
+              data = response.read()
+          assert hashlib.sha256(data).hexdigest() == "cef1d424e2bea9e624687478a14beeecca19eb14ffba12c0d9fe587a64a98808"
+          manifest = json.loads(data)
+          with open_public(base + "manifest.sig") as response:
+              signature = response.read()
+          assert hashlib.sha256(signature).hexdigest() == "55b66e994a3e33a7eebeeab5601c5fe1b739e90ef577f0860f9b5708a2f74353"
+          assert manifest["version"] == "1.0.5" and manifest["platform"] == "windows-amd64"
+          size, digest = 0, hashlib.sha256()
+          with open_public(base + manifest["file"]) as response:
+              while chunk := response.read(4 * 1024 * 1024):
+                  size += len(chunk)
+                  digest.update(chunk)
+          assert size == manifest["size"] == 213292660
+          assert digest.hexdigest() == manifest["sha256"] == "3fcfd843bd0659f70acc5c12ec94045e584a8744fd387e72a22355de40c5b9c4"
+          print(json.dumps({"anonymous_full_download": True, "size": size, "sha256": digest.hexdigest(), "signed_files_match_local_verification": True, "stable_release": True}))
